@@ -25,6 +25,12 @@
 #include <netinet/tcp.h>
 #include <arpa/inet.h>
 
+#include "ae.h"
+#include "anet.h"
+#include "mqtt.h"
+#include "logger.h"
+#include "zmalloc.h"
+#include "packet.h"
 #include "client.h"
 
 static Mqtt *mqtt;
