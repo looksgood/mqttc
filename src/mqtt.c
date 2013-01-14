@@ -1,11 +1,34 @@
 /* 
-**
-** mqtt.c - mqtt client library
-**
-** Copyright (c) 2013  Ery Lee <ery.lee at gmail dot com>
-** All rights reserved.
-**
-*/
+ * mqtt.c - mqtt client library
+ *
+ * Copyright (c) 2013  Ery Lee <ery.lee at gmail dot com>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ *   * Redistributions of source code must retain the above copyright notice,
+ *     this list of conditions and the following disclaimer.
+ *   * Redistributions in binary form must reproduce the above copyright
+ *     notice, this list of conditions and the following disclaimer in the
+ *     documentation and/or other materials provided with the distribution.
+ *   * Neither the name of mqttc nor the names of its contributors may be used
+ *     to endorse or promote products derived from this software without
+ *     specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ *
+ */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -18,7 +41,6 @@
 #include <assert.h>
 
 #include "ae.h"
-#include "sds.h"
 #include "anet.h"
 #include "mqtt.h"
 #include "logger.h"
@@ -461,7 +483,7 @@ MqttReader *mqtt_reader_new() {
 	MqttReader *reader = NULL;
 	reader = zmalloc(sizeof(MqttReader));
 	reader->err = 0;
-	reader->buf = sdsempty();
+	reader->buf = NULL;
 	reader->pos = 0;
 	reader->len = 0;
 	reader->maxbuf = 0xFFFF;
@@ -469,7 +491,7 @@ MqttReader *mqtt_reader_new() {
 }
 
 int mqtt_reader_feed(MqttReader *r, char *buf, int len) {
-    sds newbuf;
+    char *newbuf;
 
     /* Return early when this reader is in an erroneous state. */
     if (r->err)
@@ -478,23 +500,23 @@ int mqtt_reader_feed(MqttReader *r, char *buf, int len) {
     /* Copy the provided buffer. */
     if (buf != NULL && len >= 1) {
         /* Destroy internal buffer when it is empty and is quite large. */
-        if (r->len == 0 && r->maxbuf != 0 && sdsavail(r->buf) > r->maxbuf) {
-            sdsfree(r->buf);
-            r->buf = sdsempty();
+        if (r->len == 0 && r->maxbuf != 0 ) { //&& sdsavail(r->buf) > r->maxbuf) {
+            zfree(r->buf);
+            r->buf = NULL;
             r->pos = 0;
 
             /* r->buf should not be NULL since we just free'd a larger one. */
-            assert(r->buf != NULL);
+            //assert(r->buf != NULL);
         }
 
-        newbuf = sdscatlen(r->buf,buf,len);
+        //newbuf = sdscatlen(r->buf,buf,len);
         if (newbuf == NULL) {
             //__redisReaderSetErrorOOM(r);
             return MQTT_ERR;
         }
 
         r->buf = newbuf;
-        r->len = sdslen(r->buf);
+        //r->len = sdslen(r->buf);
     }
 
     return MQTT_OK;
@@ -503,7 +525,7 @@ int mqtt_reader_feed(MqttReader *r, char *buf, int len) {
 
 void mqtt_reader_free(MqttReader *reader) {
 	if(reader->buf != NULL) {
-		sdsfree(reader->buf);
+		zfree(reader->buf);
 	}
 	zfree(reader);
 }

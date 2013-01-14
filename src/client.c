@@ -27,7 +27,6 @@
 #include <arpa/inet.h>
 
 #include "ae.h"
-#include "sds.h"
 #include "anet.h"
 #include "mqtt.h"
 #include "logger.h"
