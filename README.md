@@ -3,10 +3,10 @@ mqttc
 
 mqtt client written in c language.
 
-build
+compile
 =====
 
-./build.sh
+cd src && make
 
 redis
 =====

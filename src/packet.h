@@ -35,6 +35,27 @@
 
 typedef unsigned int bool;
 
+#define PROTOCOL_MAGIC "MQIsdp"
+#define LSB(A) (unsigned char)(A & 0x00FF)
+#define MSB(A) (unsigned char)((A & 0xFF00) >> 8)
+
+enum MsgType {
+    CONNECT = 1,
+	CONNACK,
+	PUBLISH,
+	PUBACK,
+	PUBREC,
+	PUBREL,
+    PUBCOMP,
+	SUBSCRIBE,
+	SUBACK,
+	UNSUBSCRIBE,
+	UNSUBACK,
+    PINGREQ,
+	PINGRESP,
+	DISCONNECT
+};
+
 typedef union _Header
 {
 	char byte;	/**< the whole byte */
@@ -106,16 +127,6 @@ typedef struct _ConnAckPacket {
 	int rc;
 } ConnAckPacket;
 
-/**
- * SUBSCRIBE packet.
- */
-typedef struct
-{
-	Header header;	/**< MQTT header byte */
-	int msgid;		/**< MQTT message id */
-	list *subtopics;	/**< list of topic strings */
-} SubscribePacket;
-
 typedef struct _SubTopic {
 	char *topic;
 	unsigned char qos;
@@ -128,31 +139,9 @@ typedef struct
 {
 	Header header;	/**< MQTT header byte */
 	int msgid;		/**< MQTT message id */
-	list* qoss;		/**< list of granted QoSs */
+	int *qoss;		/**< list of granted QoSs */
+	int num;
 } SubAckPacket;
-
-/**
- * UNSUBSCRIBE packet.
- */
-typedef struct
-{
-	Header header;	/**< MQTT header byte */
-	int msgid;		/**< MQTT message id */
-	list* topics;	/**< list of topic strings */
-} UnsubscribePacket;
-
-/**
- * PUBLISH packet.
- */
-typedef struct
-{
-	Header header;	/**< MQTT header byte */
-	char* topic;	/**< topic string */
-	unsigned char qos;
-	int msgid;		/**< MQTT message id */
-	char* payload;	/**< binary payload, length delimited */
-	int payloadlen;
-} PublishPacket;
 
 /**
  * one of the ack packets.

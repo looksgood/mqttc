@@ -45,7 +45,6 @@
 #include "mqtt.h"
 #include "logger.h"
 #include "zmalloc.h"
-#include "config.h"
 
 #include "packet.h"
 
@@ -79,9 +78,9 @@ Mqtt *mqtt_new(aeEventLoop *el) {
 	mqtt->error = 0;
 	mqtt->msgid = 1;
 	mqtt->keepalive = 60;
-	mqtt->presences = listCreate();
-	mqtt->conn_callbacks = listCreate();
-	mqtt->message_callbacks = listCreate();
+	//mqtt->presences = listCreate();
+	//mqtt->conn_callbacks = listCreate();
+	//mqtt->message_callbacks = listCreate();
 	
 	mqtt->reader = mqtt_reader_new();
 	
@@ -426,8 +425,9 @@ void mqtt_disconnect(Mqtt *mqtt) {
     }
     mqtt_set_state(mqtt, STATE_DISCONNECTED);
 
+	/*
     if(mqtt->presences) {
-        listRelease(mqtt->presences);
+        //listRelease(mqtt->presences);
         //mqtt->presences = listCreate();
         //listSetMatchMethod(mqtt->presences, strmatch); 
     }
@@ -436,6 +436,7 @@ void mqtt_disconnect(Mqtt *mqtt) {
         //hash_release(mqtt->message_callbacks);
         //mqtt->message_callbacks = hash_new(8, NULL);
     }
+	*/
 }
 
 static void mqtt_send_disconnect(Mqtt *mqtt) {

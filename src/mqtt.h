@@ -39,13 +39,11 @@
 #include <stdint.h>
 
 #include "ae.h"
-#include "list.h"
 #include "packet.h"
 
 #define MQTT_OK 0
 #define MQTT_ERR -1
 
-#define PROTOCOL_MAGIC "MQIsdp"
 #define PROTOCOL_VERSION "MQTT/3.1"
 
 #define MQTT_PROTO_MAJOR 3
@@ -54,26 +52,6 @@
 #define QOS_0 0
 #define QOS_1 1
 #define QOS_2 2
-
-#define LSB(A) (unsigned char)(A & 0x00FF)
-#define MSB(A) (unsigned char)((A & 0xFF00) >> 8)
-
-enum MsgType {
-    CONNECT = 1,
-	CONNACK,
-	PUBLISH,
-	PUBACK,
-	PUBREC,
-	PUBREL,
-    PUBCOMP,
-	SUBSCRIBE,
-	SUBACK,
-	UNSUBSCRIBE,
-	UNSUBACK,
-    PINGREQ,
-	PINGRESP,
-	DISCONNECT
-};
 
 enum ConnAckCode {
 	CONNACK_ACCEPT  = 0,
@@ -160,14 +138,14 @@ typedef struct _Mqtt {
 
     void *userdata;
 
-    list *presences;
+    //list *presences;
 
-    list *conn_callbacks;
+    //list *conn_callbacks;
 
 	//TODO: NEED?
-    list *presence_callbacks;
+    //list *presence_callbacks;
 
-    list *message_callbacks;
+    //list *message_callbacks;
 
 	MqttWill *will;
 

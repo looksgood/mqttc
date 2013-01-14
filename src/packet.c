@@ -34,16 +34,12 @@
 #include <stdarg.h>
 #include <string.h>
 #include <math.h>
-#include <errno.h>
 #include <ctype.h>
 #include <unistd.h>
 #include <assert.h>
 
-#include "anet.h"
 #include "zmalloc.h"
-#include "config.h"
 
-#include "mqtt.h"
 #include "packet.h"
 /**
  * List of the predefined MQTT v3 packet names.

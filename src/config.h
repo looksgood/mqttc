@@ -1,24 +1,6 @@
 #ifndef __CONFIG_H
 #define __CONFIG_H
 
-#if defined(__APPLE__)
-
-	#define OSNAME "macosx"
-
-#elif defined(__linux__)
-
-	#define OSNAME "linux"
-
-#elif defined(__freebsd__)
-
-	#define OSNAME "freebsd"
-
-#elif defined(__FreeBSD__)
-
-	#define OSNAME "freebsd"
-
-#endif
-
 #ifdef __APPLE__
 #include <AvailabilityMacros.h>
 #endif
