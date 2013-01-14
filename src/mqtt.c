@@ -92,19 +92,19 @@ void mqtt_set_state(Mqtt *mqtt, int state) {
 	mqtt->state = state;
 }
 
-void mqtt_set_clientid(Mqtt *mqtt, char *clientid) {
+void mqtt_set_clientid(Mqtt *mqtt, const char *clientid) {
 	mqtt->clientid = zstrdup(clientid);
 }
 
-void mqtt_set_username(Mqtt *mqtt, char *username) {
+void mqtt_set_username(Mqtt *mqtt, const char *username) {
 	mqtt->username = zstrdup(username);
 }
 
-void mqtt_set_passwd(Mqtt *mqtt, char *passwd) {
+void mqtt_set_passwd(Mqtt *mqtt, const char *passwd) {
 	mqtt->password = zstrdup(passwd);
 }
 
-void mqtt_set_server(Mqtt *mqtt, char *server) {
+void mqtt_set_server(Mqtt *mqtt, const char *server) {
 	mqtt->server = zstrdup(server);
 }
 
@@ -372,7 +372,7 @@ int mqtt_subscribe(Mqtt *mqtt, const char *topic, unsigned char qos) {
 }
 
 //UNSUBSCRIBE
-int mqtt_unsubscribe(Mqtt *mqtt, char *topic) {
+int mqtt_unsubscribe(Mqtt *mqtt, const char *topic) {
 	int len = 0;
 	int msgid;
 	Header header;

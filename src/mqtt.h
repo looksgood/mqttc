@@ -155,15 +155,13 @@ typedef struct _Mqtt {
 
 Mqtt *mqtt_new(aeEventLoop *el);
 
-void mqtt_set_clientid(Mqtt *mqtt, char *clientid);
+void mqtt_set_clientid(Mqtt *mqtt, const char *clientid);
 
-void mqtt_set_username(Mqtt *mqtt, char *username);
+void mqtt_set_username(Mqtt *mqtt, const char *username);
 
-void mqtt_set_passwd(Mqtt *mqtt, char *passwd);
+void mqtt_set_passwd(Mqtt *mqtt, const char *passwd);
 
-void mqtt_set_user(Mqtt *mqtt, char *user, char *passwd);
-
-void mqtt_set_server(Mqtt *mqtt, char *server);
+void mqtt_set_server(Mqtt *mqtt, const char *server);
 
 void mqtt_set_port(Mqtt *mqtt, int port);
 
@@ -208,7 +206,7 @@ void mqtt_pubcomp(Mqtt *mqtt, int msgid);
 int mqtt_subscribe(Mqtt *mqtt, const char *topic, unsigned char qos);
 
 //UNSUBSCRIBE
-int mqtt_unsubscribe(Mqtt *mqtt, char *topic);
+int mqtt_unsubscribe(Mqtt *mqtt, const char *topic);
 
 //PINGREQ
 void mqtt_ping(Mqtt *mqtt);
@@ -234,8 +232,6 @@ MqttReader *mqtt_reader_new();
 int mqtt_reader_feed(MqttReader *reader, char *buf, int len);
 
 void mqtt_reader_free(MqttReader *reader);
-
-
 
 #endif /* __MQTT_H__ */
 
