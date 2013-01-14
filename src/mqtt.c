@@ -39,6 +39,7 @@
 #include <ctype.h>
 #include <unistd.h>
 #include <assert.h>
+#include <sys/stat.h>
 
 #include "ae.h"
 #include "anet.h"
