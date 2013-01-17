@@ -87,22 +87,22 @@ typedef struct _MqttMsg {
 	char *payload;
 } MqttMsg;
 
-//--------------------------------------
-/* State for the mqtt frame reader */
-//--------------------------------------
-typedef struct _MqttReader {
-    int err; /* Error flags, 0 when there is no error */
-    char errstr[128]; /* String representation of error when applicable */
+typedef struct _KeepAlive {
+	int period;
+	long long timerid;
+	long long timeoutid;
+} KeepAlive;
 
-    char *buf; /* Read buffer */
-    size_t pos; /* Buffer cursor */
-    size_t len; /* Buffer length */
-    size_t maxbuf; /* Max length of unused buffer */
 
-    void *privdata;
-} MqttReader;
+typedef struct _Mqtt Mqtt;
 
-typedef struct _Mqtt {
+//Command Callback
+typedef void (*command_callback)(Mqtt *mqtt, void *data, int id);
+
+//Message Callback
+typedef void (*message_callback)(Mqtt *mqtt, MqttMsg *message);
+
+struct _Mqtt {
 
 	aeEventLoop *el;
 
@@ -132,28 +132,21 @@ typedef struct _Mqtt {
 
 	int cleansess;
 
-    int keepalive;
-
-    long long keepalive_timeout;
+    KeepAlive *keepalive;
 
     void *userdata;
 
-    //list *presences;
-
-    //list *conn_callbacks;
-
-	//TODO: NEED?
-    //list *presence_callbacks;
-
-    //list *message_callbacks;
-
 	MqttWill *will;
 
-	MqttReader *reader;
+	command_callback callbacks[16];
 
-} Mqtt;
+	message_callback msgcallback;
 
-Mqtt *mqtt_new(aeEventLoop *el);
+};
+
+Mqtt *mqtt_new();
+
+void mqtt_run(Mqtt *mqtt);
 
 void mqtt_set_clientid(Mqtt *mqtt, const char *clientid);
 
@@ -170,24 +163,23 @@ void mqtt_set_will(Mqtt *mqtt, MqttWill *will);
 
 void mqtt_clear_will(Mqtt *mqtt);
 
+//MQTT KeepAlive
+void mqtt_set_keepalive(Mqtt *mqtt, int period);
+
+void mqtt_set_command_callback(Mqtt *mqtt, unsigned char type, command_callback callback); 
+
+void mqtt_clear_command_callback(Mqtt *mqtt, unsigned char type);
+
+void mqtt_set_message_callback(Mqtt *mqtt, message_callback callback);
+
+void mqtt_clear_message_callback(Mqtt *mqtt);
+
 //CONNECT
 int mqtt_connect(Mqtt *mqtt);
 
 int mqtt_reconnect(aeEventLoop *el, long long id, void *clientData);
 
-typedef void (*mqtt_conn_callback)(Mqtt *mqtt, int connack);
-
-void mqtt_add_conn_callback(Mqtt *mqtt, mqtt_conn_callback callback); 
-
-//MESSAGE CALLBACK
-typedef void (*mqtt_message_callback)(Mqtt *mqtt, MqttMsg *message);
-
-void mqtt_add_message_callback(Mqtt *mqtt, mqtt_message_callback callback);
-
-void mqtt_remove_message_callback(Mqtt *mqtt, mqtt_message_callback callback);
-
-//PUBLISH
-//return msgid
+//PUBLISH return msgid
 int mqtt_publish(Mqtt *mqtt, MqttMsg *msg);
 
 //PUBACK for QOS_2
@@ -226,12 +218,6 @@ void mqtt_will_release(MqttWill *will);
 MqttMsg *mqtt_msg_new();
 
 void mqtt_msg_free(MqttMsg *msg);
-
-MqttReader *mqtt_reader_new();
-
-int mqtt_reader_feed(MqttReader *reader, char *buf, int len);
-
-void mqtt_reader_free(MqttReader *reader);
 
 #endif /* __MQTT_H__ */
 

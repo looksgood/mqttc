@@ -56,8 +56,7 @@ static char* packet_names[] =
  * @param type mqtt message type
  * @return the corresponding string, or "UNKNOWN"
  */
-char* mqtt_packet_name(int type)
-{
+char* _packet_name(int type) {
 	return (type >= 0 && type <= DISCONNECT) ? packet_names[type] : "UNKNOWN";
 }
 
@@ -73,6 +72,20 @@ int encode_length(char *buf, int length) {
 		buf[num++] = d;
 	} while (length > 0);
 	return num;
+}
+
+int decode_length(char **buf, int *count) {
+	int c = 0;
+	int i, val = 0, mul = 1;
+    do {
+		i = **buf;
+		val += (i & 127) * mul;
+		mul *= 128;
+		(*buf)++;
+		c++;
+    } while ((i & 128) != 0);
+	*count = c;
+	return val;
 }
 
 void write_header(char **pptr, Header *header) {

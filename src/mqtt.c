@@ -46,17 +46,20 @@
 
 #include "ae.h"
 #include "anet.h"
-#include "mqtt.h"
-#include "logger.h"
 #include "zmalloc.h"
-
+#include "logger.h"
 #include "packet.h"
+#include "mqtt.h"
 
 #define MAX_RETRIES 3
 
-#define HEARTBEAT 120000
+#define KEEPALIVE 300000
 
-#define HEARTBEAT_TIMEOUT 20000
+#define KEEPALIVE_TIMEOUT 600000
+
+#define READ_BUFFER (1024*16)
+
+static KeepAlive *keepalive_new(int period);
 
 static void mqtt_send_connect(Mqtt *mqtt);
 
@@ -64,14 +67,26 @@ static void mqtt_send_publish(Mqtt *mqtt, MqttMsg *msg);
 
 static void mqtt_send_ack(Mqtt *mqtt, int type, int msgid);
 
+static void mqtt_send_subscribe(Mqtt *mqtt, int msgid, const char *topic, unsigned char qos);
+
+static void mqtt_send_unsubscribe(Mqtt *mqtt, int msgid, const char *topic);
+
+static void mqtt_send_ping(Mqtt *mqtt);
+
 static void mqtt_send_disconnect(Mqtt *mqtt);
 
-static void mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask);
+static void _mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask);
 
-Mqtt *mqtt_new(aeEventLoop *el) {
+static void mqtt_on_command(Mqtt *mqtt, int type, void *data, int id);
+
+static int mqtt_heartbeat(aeEventLoop *el, long long id, void *clientdata);
+
+Mqtt *mqtt_new() {
+	int i;
 	Mqtt *mqtt = NULL;
+
 	mqtt = zmalloc(sizeof(Mqtt));
-	mqtt->el = el;
+	mqtt->el = aeCreateEventLoop();
 	mqtt->state = STATE_INIT;
 	mqtt->server = NULL;
 	mqtt->username = NULL;
@@ -81,12 +96,14 @@ Mqtt *mqtt_new(aeEventLoop *el) {
 	mqtt->retries = 3;
 	mqtt->error = 0;
 	mqtt->msgid = 1;
-	mqtt->keepalive = 60;
-	//mqtt->presences = listCreate();
-	//mqtt->conn_callbacks = listCreate();
-	//mqtt->message_callbacks = listCreate();
-	
-	mqtt->reader = mqtt_reader_new();
+
+	mqtt->keepalive = keepalive_new(60000);
+
+	for(i = 0; i < 16; i++) {
+		mqtt->callbacks[i] = NULL;
+	}
+
+	mqtt->msgcallback = NULL;
 	
 	return mqtt;
 }
@@ -127,6 +144,43 @@ void mqtt_clear_will(Mqtt *mqtt) {
 	mqtt->will = NULL;
 }
 
+void mqtt_set_keepalive(Mqtt *mqtt, int period) {
+	mqtt->keepalive->period = period;
+}
+
+//MQTT KeepAlive
+static KeepAlive *keepalive_new(int period) {
+	KeepAlive *ka = NULL;
+	ka = zmalloc(sizeof(KeepAlive));
+	ka->period = period;
+	ka->timerid = 0;
+	ka->timeoutid = 0;
+	return ka;
+}
+
+void mqtt_set_command_callback(Mqtt *mqtt, unsigned char type, command_callback callback) {
+	if(type >= 16) return;
+	mqtt->callbacks[type] = callback;
+}
+
+void mqtt_clear_command_callback(Mqtt *mqtt, unsigned char type) {
+	if(type >= 16) return;
+	mqtt->callbacks[type] = NULL;
+}
+
+static void mqtt_on_command(Mqtt *mqtt, int type, void *data, int id) {
+	command_callback cb = mqtt->callbacks[type];
+	if(cb) cb(mqtt, data, id);
+}
+
+void mqtt_set_message_callback(Mqtt *mqtt, message_callback callback) {
+	mqtt->msgcallback = callback;
+}
+
+void mqtt_clear_message_callback(Mqtt *mqtt) {
+	mqtt->msgcallback = NULL;
+}
+
 int mqtt_connect(Mqtt *mqtt) {
     char err[1024] = {0};
     char server[1024] = {0};
@@ -141,10 +195,27 @@ int mqtt_connect(Mqtt *mqtt) {
         return fd;
     }
     mqtt->fd = fd;
-    aeCreateFileEvent(mqtt->el, fd, AE_READABLE, (aeFileProc *)mqtt_read, (void *)mqtt); 
+    aeCreateFileEvent(mqtt->el, fd, AE_READABLE, (aeFileProc *)_mqtt_read, (void *)mqtt); 
 	mqtt_send_connect(mqtt);
     mqtt_set_state(mqtt, STATE_CONNECTING);
+	mqtt_on_command(mqtt, CONNECT, NULL, STATE_CONNECTING);
+	//TODO: FIXME LATER
+	
+	mqtt->keepalive->timerid = aeCreateTimeEvent(mqtt->el, 
+		mqtt->keepalive->period, mqtt_heartbeat, mqtt, NULL);
     return fd;
+}
+
+static int 
+mqtt_heartbeat(aeEventLoop *el, long long id, void *clientdata) {
+	int period;
+	Mqtt *mqtt = (Mqtt *)clientdata;
+	period = mqtt->keepalive->period;
+	mqtt_send_ping(mqtt);
+	//TODO: TIMEOUT
+    //mqtt->keepalive->timeoutid = aeCreateTimeEvent(el, 
+    //   period*2, mqtt_keepalive_timeout, mqtt, NULL);
+	return period;
 }
 
 static void mqtt_send_connect(Mqtt *mqtt) {
@@ -245,20 +316,6 @@ mqtt_reconnect(aeEventLoop *el, long long id, void *clientData)
     return AE_NOMORE;
 }
 
-//TODO: one callback or list?
-void mqtt_add_conn_callback(Mqtt *mqtt, mqtt_conn_callback callback) {
-	return;
-}
-
-//TODO: one callback or list?
-void mqtt_add_message_callback(Mqtt *mqtt, mqtt_message_callback callback) {
-	return;
-}
-
-void mqtt_remove_message_callback(Mqtt *mqtt, mqtt_message_callback callback) {
-	return;
-}
-
 //PUBLISH
 //return msgid
 int mqtt_publish(Mqtt *mqtt, MqttMsg *msg) {
@@ -266,6 +323,7 @@ int mqtt_publish(Mqtt *mqtt, MqttMsg *msg) {
 		msg->id = mqtt->msgid++;
 	}
 	mqtt_send_publish(mqtt, msg);
+	mqtt_on_command(mqtt, PUBLISH, msg, msg->id);
 	return msg->id;
 }
 
@@ -341,15 +399,19 @@ static void mqtt_send_ack(Mqtt *mqtt, int type, int msgid) {
 
 //SUBSCRIBE
 int mqtt_subscribe(Mqtt *mqtt, const char *topic, unsigned char qos) {
+	int msgid = mqtt->msgid++;
+	mqtt_send_subscribe(mqtt, msgid, topic, qos);
+	mqtt_on_command(mqtt, SUBSCRIBE, (void *)topic, msgid);
+	return msgid;
+}
+
+static void mqtt_send_subscribe(Mqtt *mqtt, int msgid, const char *topic, unsigned char qos) {
 	int len = 0;
-	int msgid;
 	Header header;
 	char *ptr, *buffer;
 	
 	int remaining_count;
 	char remaining_length[4];
-	
-	msgid = mqtt->msgid++;
 	
 	header.byte = 0;
 	header.bits.qos = QOS_1;
@@ -370,21 +432,23 @@ int mqtt_subscribe(Mqtt *mqtt, const char *topic, unsigned char qos) {
 	anetWrite(mqtt->fd, buffer, ptr-buffer);
 
 	zfree(buffer);
-	
-	return msgid;
 }
 
 //UNSUBSCRIBE
 int mqtt_unsubscribe(Mqtt *mqtt, const char *topic) {
+	int msgid = mqtt->msgid++;
+	mqtt_send_unsubscribe(mqtt, msgid, topic);
+	mqtt_on_command(mqtt, UNSUBSCRIBE, (void *)topic, msgid);
+	return msgid;
+}
+
+static void mqtt_send_unsubscribe(Mqtt *mqtt, int msgid, const char *topic) {
 	int len = 0;
-	int msgid;
 	Header header;
 	char *ptr, *buffer;
 	
 	int remaining_count;
 	char remaining_length[4];
-	
-	msgid = mqtt->msgid++;
 	
 	header.byte = 0;
 	header.bits.qos = QOS_1;
@@ -404,12 +468,15 @@ int mqtt_unsubscribe(Mqtt *mqtt, const char *topic) {
 	anetWrite(mqtt->fd, buffer, ptr-buffer);
 
 	zfree(buffer);
-	
-	return msgid;
 }
 
 //PINGREQ
 void mqtt_ping(Mqtt *mqtt) {
+	mqtt_send_ping(mqtt);
+	mqtt_on_command(mqtt, PINGREQ, NULL, 0);
+}
+
+static void mqtt_send_ping(Mqtt *mqtt) {
 	Header header;
 	header.byte = 0;
 	header.bits.type = PINGREQ;
@@ -428,19 +495,7 @@ void mqtt_disconnect(Mqtt *mqtt) {
         mqtt->fd = -1;
     }
     mqtt_set_state(mqtt, STATE_DISCONNECTED);
-
-	/*
-    if(mqtt->presences) {
-        //listRelease(mqtt->presences);
-        //mqtt->presences = listCreate();
-        //listSetMatchMethod(mqtt->presences, strmatch); 
-    }
-
-    if(mqtt->message_callbacks) {
-        //hash_release(mqtt->message_callbacks);
-        //mqtt->message_callbacks = hash_new(8, NULL);
-    }
-	*/
+	mqtt_on_command(mqtt, CONNECT, NULL, STATE_DISCONNECTED);
 }
 
 static void mqtt_send_disconnect(Mqtt *mqtt) {
@@ -451,7 +506,179 @@ static void mqtt_send_disconnect(Mqtt *mqtt) {
 	anetWrite(mqtt->fd, buffer, 2);
 }
 
-MqttWill *mqtt_will_new(char *topic, char *msg, int retain, int qos) {
+static void 
+_mqtt_sleep(struct aeEventLoop *eventLoop) {
+	//what to do?
+}
+
+void 
+mqtt_run(Mqtt *mqtt) {
+    aeSetBeforeSleepProc(mqtt->el, _mqtt_sleep);
+    aeMain(mqtt->el);
+    aeDeleteEventLoop(mqtt->el);
+}
+
+//RELEASE
+void 
+mqtt_release(Mqtt *mqtt) {
+	return;
+}
+
+/*--------------------------------------
+** MQTT handler and reader.
+--------------------------------------*/
+static void
+_mqtt_handle_connack(Mqtt *mqtt, int rc) {
+	logger_info("MQTT", "connack code: %d", rc);
+	if(rc == CONNACK_ACCEPT) {
+		mqtt_set_state(mqtt, STATE_CONNECTED);
+		mqtt_on_command(mqtt, CONNECT, NULL, STATE_CONNECTED);
+	} else {
+		//TODO: fixme later
+		exit(1);
+	}
+}
+
+static void
+_mqtt_handle_publish(Mqtt *mqtt, MqttMsg *msg) {
+	logger_info("MQTT", "got publish: %s", msg->topic); 	
+	mqtt_on_command(mqtt, PUBLISH, msg, msg->id);
+	mqtt_msg_free(msg);
+}
+
+static void
+_mqtt_handle_puback(Mqtt *mqtt, int type, int msgid) {
+	logger_info("MQTT", "%s: msgid=%d", _packet_name(type), msgid);
+	mqtt_on_command(mqtt, type, NULL, msgid);
+}
+
+static void
+_mqtt_handle_suback(Mqtt *mqtt, int msgid, int qos) {
+	logger_info("MQTT", "SUBACK: msgid=%d, qos=%d", msgid, qos);
+	mqtt_on_command(mqtt, SUBACK, NULL, msgid);
+}
+
+static void
+_mqtt_handle_unsuback(Mqtt *mqtt, int msgid) {
+	logger_info("MQTT", "UNSUBACK: msgid=%d", msgid);
+	mqtt_on_command(mqtt, UNSUBACK, NULL, msgid);
+}
+
+static void
+_mqtt_handle_pingresp(Mqtt *mqtt) {
+	logger_info("MQTT", "PINGRESP");
+	mqtt_on_command(mqtt, PINGRESP, NULL, 0);
+}
+
+static void 
+_mqtt_handle_packet(Mqtt *mqtt, Header *header, char *buffer, int buflen) {
+	int rc, qos, msgid=0;
+	int type = header->bits.type;
+	bool retain, dup;
+	int topiclen = 0;
+	char *topic = NULL;
+	char *payload = NULL;
+	int payloadlen = buflen;
+	MqttMsg *msg = NULL;
+	switch (type) {
+	case CONNACK:
+		read_char(&buffer);
+		_mqtt_handle_connack(mqtt, read_char(&buffer));
+		break;
+	case PUBLISH:
+		
+		qos = header->bits.qos;
+		retain = header->bits.retain;
+		dup = header->bits.dup;
+		logger_info("MQTT", "publish length: %d, qos: %d", buflen, qos);
+		topic = read_string_len(&buffer, &topiclen);
+		logger_info("MQTT", "topiclen: %d", topiclen);
+		logger_info("MQTT", "topic: %s", topic);
+		payloadlen -= (2+topiclen);
+		if( qos > 0) {
+			msgid = read_int(&buffer);
+			payloadlen -= 2;
+		}
+		logger_info("MQTT", "payloadlen: %d", payloadlen);
+		payload = zmalloc(payloadlen+1);
+		memcpy(payload, buffer, payloadlen);
+		payload[payloadlen] = '\0';
+		msg = mqtt_msg_new(msgid, qos, retain, dup, topic, payloadlen, payload);
+		_mqtt_handle_publish(mqtt, msg);
+		break;
+	case PUBACK:
+	case PUBREC:
+	case PUBREL:
+	case PUBCOMP:
+		msgid = read_int(&buffer);
+		_mqtt_handle_puback(mqtt, type, msgid);
+		break;
+	case SUBACK:
+		msgid = read_int(&buffer);
+		qos = read_char(&buffer);
+		_mqtt_handle_suback(mqtt, msgid, qos);
+		break;
+	case UNSUBACK:
+		msgid = read_int(&buffer);
+		_mqtt_handle_unsuback(mqtt, msgid);
+		break;
+	case PINGRESP:
+		_mqtt_handle_pingresp(mqtt);
+		break;
+	default:
+		logger_error("MQTT", "error type: %d", header->bits.type);
+	}
+}
+
+static void 
+_mqtt_reader_feed(Mqtt *mqtt, char *buffer, int len) {
+	Header header;
+
+	char *ptr = buffer;
+	int remaining_length;
+	int remaining_count;
+	
+	header.byte = *ptr++;
+	
+	remaining_length = decode_length(&ptr, &remaining_count);
+	if( (1+remaining_count+remaining_length) != len ) {
+		logger_error("MQTT", "badpacket: remaing_length=%d, remaing_count=%d, len=%d",
+			remaining_length, remaining_count, len);	
+		return;
+	}
+	_mqtt_handle_packet(mqtt, &header, ptr, remaining_length);
+}
+
+static void 
+_mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask) {
+    int nread, timeout;
+	char buffer[READ_BUFFER];
+	Mqtt *mqtt = (Mqtt *)privdata;
+
+    nread = read(fd, buffer, READ_BUFFER);
+    if (nread < 0) {
+        if (errno == EAGAIN) {
+            logger_warning("MQTT", "TCP EAGAIN");
+            return;
+        } else {
+			//TODO: set error, disconnect, exit?
+            //__redisSetError(c,REDIS_ERR_IO,NULL);
+        }
+    } else if (nread == 0) {
+        logger_error("MQTT", "mqtt broker is disconnected.");
+        mqtt_disconnect(mqtt);
+		timeout = (random() % 120) * 1000,
+		logger_info("MQTT", "reconnect after %d seconds", timeout/1000);
+		aeCreateTimeEvent(el, timeout, mqtt_reconnect, mqtt, NULL);
+    } else {
+        logger_debug("SOCKET", "RECV: %d", nread);
+		//TODO: fix later
+        _mqtt_reader_feed(mqtt, buffer, nread);
+    }
+}
+
+MqttWill *
+mqtt_will_new(char *topic, char *msg, int retain, int qos) {
 	MqttWill *will = zmalloc(sizeof(MqttWill));
 	will->topic = zstrdup(topic);
 	will->msg = zstrdup(msg);
@@ -460,7 +687,8 @@ MqttWill *mqtt_will_new(char *topic, char *msg, int retain, int qos) {
 	return will;
 }
 
-void mqtt_will_release(MqttWill *will) {
+void 
+mqtt_will_release(MqttWill *will) {
 	if(will->topic) {
 		zfree(will->topic);
 	}
@@ -473,102 +701,27 @@ void mqtt_will_release(MqttWill *will) {
 //-------------------
 //TODO Later
 //-------------------
-MqttMsg *mqtt_msg_new() {
-	return NULL;
+MqttMsg *
+mqtt_msg_new(int msgid, int qos, bool retain, bool dup, char *topic, int payloadlen, char *payload) {
+	MqttMsg *msg = zmalloc(sizeof(MqttMsg));
+	msg->id = msgid;
+	msg->qos = qos;
+	msg->retain = retain;
+	msg->dup = dup;
+	msg->topic = topic;
+	msg->payloadlen = payloadlen;
+	msg->payload = payload;
+	return msg;
 }
 
-void mqtt_msg_free(MqttMsg *msg) {
-	return;
-}
-
-/*--------------------------------------
-** MQTT Protocal Reader
---------------------------------------*/
-MqttReader *mqtt_reader_new() {
-	MqttReader *reader = NULL;
-	reader = zmalloc(sizeof(MqttReader));
-	reader->err = 0;
-	reader->buf = NULL;
-	reader->pos = 0;
-	reader->len = 0;
-	reader->maxbuf = 0xFFFF;
-	return reader;
-}
-
-int mqtt_reader_feed(MqttReader *r, char *buf, int len) {
-    char *newbuf;
-
-    /* Return early when this reader is in an erroneous state. */
-    if (r->err)
-        return MQTT_ERR;
-
-    /* Copy the provided buffer. */
-    if (buf != NULL && len >= 1) {
-        /* Destroy internal buffer when it is empty and is quite large. */
-        if (r->len == 0 && r->maxbuf != 0 ) { //&& sdsavail(r->buf) > r->maxbuf) {
-            zfree(r->buf);
-            r->buf = NULL;
-            r->pos = 0;
-
-            /* r->buf should not be NULL since we just free'd a larger one. */
-            //assert(r->buf != NULL);
-        }
-
-        //newbuf = sdscatlen(r->buf,buf,len);
-        if (newbuf == NULL) {
-            //__redisReaderSetErrorOOM(r);
-            return MQTT_ERR;
-        }
-
-        r->buf = newbuf;
-        //r->len = sdslen(r->buf);
-    }
-
-    return MQTT_OK;
-	
-}
-
-void mqtt_reader_free(MqttReader *reader) {
-	if(reader->buf != NULL) {
-		zfree(reader->buf);
+void 
+mqtt_msg_free(MqttMsg *msg) {
+	if(msg->topic) {
+		zfree(msg->topic);
 	}
-	zfree(reader);
+	if(msg->payload) {
+		zfree(msg->payload);
+	}
+	zfree(msg);
 }
 
-//Internal 
-static void mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask) {
-    int nread, timeout;
-    char buf[1024*16];
-    Mqtt *mqtt = (Mqtt*)privdata;
-
-    /* Return early when the context has seen an error. */
-    if (mqtt->err)
-        return;
-
-    nread = read(fd, buf, sizeof(buf));
-    if (nread == -1) {
-        if (errno == EAGAIN) {
-            logger_warning("MQTT", "TCP EAGAIN");
-            return;
-        } else {
-			//TODO: 
-            //__redisSetError(c,REDIS_ERR_IO,NULL);
-        }
-    } else if (nread == 0) {
-        logger_error("MQTT", "mqtt broker is disconnected.");
-        mqtt_disconnect(mqtt);
-		timeout = (random() % 120) * 1000,
-		logger_info("MQTT", "reconnect after %d seconds", timeout/1000);
-		aeCreateTimeEvent(el, timeout, mqtt_reconnect, mqtt, NULL);
-    } else {
-        logger_debug("SOCKET", "RECV: %d", nread);
-        if(mqtt_reader_feed(mqtt->reader, buf, nread) != MQTT_OK) {
-            //__redisSetError(c,c->reader->err,c->reader->errstr);
-        }
-    }
-}
-
-//RELEASE
-void mqtt_release(Mqtt *mqtt) {
-	return;
-}

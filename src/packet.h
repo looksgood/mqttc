@@ -40,7 +40,7 @@ typedef unsigned int bool;
 #define MSB(A) (unsigned char)((A & 0xFF00) >> 8)
 
 enum MsgType {
-    CONNECT = 1,
+	CONNECT = 1,
 	CONNACK,
 	PUBLISH,
 	PUBACK,
@@ -158,7 +158,11 @@ typedef AckPacket PubRelPacket;
 typedef AckPacket PubCompPacket;
 typedef AckPacket UnsubackPacket;
 
+char* _packet_name(int type);
+
 int encode_length(char *buf, int length);
+
+int decode_length(char **buf, int *count);
 
 void write_header(char **pptr, Header *header);
 
