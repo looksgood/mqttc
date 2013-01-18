@@ -29,7 +29,6 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  */
-
 #ifndef __MQTT_H
 #define __MQTT_H
 
@@ -37,70 +36,75 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "ae.h"
-#include "packet.h"
 
 #define MQTT_OK 0
 #define MQTT_ERR -1
 
-#define PROTOCOL_VERSION "MQTT/3.1"
-
 #define MQTT_PROTO_MAJOR 3
 #define MQTT_PROTO_MINOR 1
 
-#define QOS_0 0
-#define QOS_1 1
-#define QOS_2 2
+#define MQTT_PROTOCOL_VERSION "MQTT/3.1"
 
-enum ConnAckCode {
+/*
+ * MQTT QOS
+ */
+#define MQTT_QOS0 0
+#define MQTT_QOS1 1
+#define MQTT_QOS2 2
+
+/*
+ * MQTT ConnAck
+ */
+typedef enum {
 	CONNACK_ACCEPT  = 0,
 	CONNACK_PROTO_VER, 
 	CONNACK_INVALID_ID,
 	CONNACK_SERVER,
 	CONNACK_CREDENTIALS,
 	CONNACK_AUTH
-};
+} ConnAck;
 
-enum MqttState {
-	STATE_INIT = 0,
-	STATE_CONNECTING,
-	STATE_CONNECTED,
-	STATE_DISCONNECTED
-};
+/*
+ * MQTT State
+ */
+typedef enum {
+	MQTT_STATE_INIT = 0,
+	MQTT_STATE_CONNECTING,
+	MQTT_STATE_CONNECTED,
+	MQTT_STATE_DISCONNECTED
+} MqttState;
 
-//mqtt will.
-typedef struct _MqttWill {
-	int retain;
-	int qos;
-	char *topic;
-	char *msg;
+/*
+ * MQTT Will
+ */
+typedef struct {
+	bool retain;
+	uint8_t qos;
+	const char *topic;
+	const char *msg;
 } MqttWill;
 
-typedef struct _MqttMsg {
-	int id;
-	int qos;
-	int retain;
-	int dup;
-	char *topic;
+/*
+ * MQTT Message
+ */
+typedef struct {
+	uint16_t id;
+	uint8_t qos;
+	bool retain;
+	bool dup;
+	const char *topic;
 	int payloadlen;
-	char *payload;
+	const char *payload;
 } MqttMsg;
-
-typedef struct _KeepAlive {
-	int period;
-	long long timerid;
-	long long timeoutid;
-} KeepAlive;
-
 
 typedef struct _Mqtt Mqtt;
 
-//Command Callback
-typedef void (*command_callback)(Mqtt *mqtt, void *data, int id);
+typedef void (*MqttCallback)(Mqtt *mqtt, void *data, int id);
 
-//Message Callback
-typedef void (*message_callback)(Mqtt *mqtt, MqttMsg *message);
+typedef void (*MqttMsgCallback)(Mqtt *mqtt, MqttMsg *message);
 
 struct _Mqtt {
 
@@ -108,17 +112,17 @@ struct _Mqtt {
 
     int fd; //socket
 
-	int state;
+	uint8_t state;
 
 	char *err;
 
     char *server;
 
-    char *username;
+    const char *username;
 
-    char *password;
+    const char *password;
 
-	char *clientid;
+	const char *clientid;
 
     int port;
 
@@ -128,25 +132,31 @@ struct _Mqtt {
 
 	int msgid;
 
+	bool cleansess;
+
     /* keep alive */
 
-	int cleansess;
+	unsigned int keepalive;
 
-    KeepAlive *keepalive;
+	long long keepalive_timer;
+
+	long long keepalive_timeout_timer;
 
     void *userdata;
 
 	MqttWill *will;
 
-	command_callback callbacks[16];
+	MqttCallback callbacks[16];
 
-	message_callback msgcallback;
+	MqttMsgCallback msgcallback;
+
+	bool shutdown_asap;
 
 };
 
-Mqtt *mqtt_new();
+char *mqtt_packet_name(int type);
 
-void mqtt_run(Mqtt *mqtt);
+Mqtt *mqtt_new(aeEventLoop *el);
 
 void mqtt_set_clientid(Mqtt *mqtt, const char *clientid);
 
@@ -158,31 +168,29 @@ void mqtt_set_server(Mqtt *mqtt, const char *server);
 
 void mqtt_set_port(Mqtt *mqtt, int port);
 
-//MQTT Will
+void mqtt_set_retries(Mqtt *mqtt, int retries);
+
 void mqtt_set_will(Mqtt *mqtt, MqttWill *will); 
 
 void mqtt_clear_will(Mqtt *mqtt);
 
-//MQTT KeepAlive
-void mqtt_set_keepalive(Mqtt *mqtt, int period);
+void mqtt_set_keepalive(Mqtt *mqtt, int keepalive);
 
-void mqtt_set_command_callback(Mqtt *mqtt, unsigned char type, command_callback callback); 
+void mqtt_set_callback(Mqtt *mqtt, uint8_t type, MqttCallback callback); 
 
-void mqtt_clear_command_callback(Mqtt *mqtt, unsigned char type);
+void mqtt_clear_callback(Mqtt *mqtt, uint8_t type);
 
-void mqtt_set_message_callback(Mqtt *mqtt, message_callback callback);
+void mqtt_set_msg_callback(Mqtt *mqtt, MqttMsgCallback callback);
 
-void mqtt_clear_message_callback(Mqtt *mqtt);
+void mqtt_clear_msg_callback(Mqtt *mqtt);
 
-//CONNECT
+//MQTT CONNECT
 int mqtt_connect(Mqtt *mqtt);
 
-int mqtt_reconnect(aeEventLoop *el, long long id, void *clientData);
-
-//PUBLISH return msgid
+//MQTT PUBLISH
 int mqtt_publish(Mqtt *mqtt, MqttMsg *msg);
 
-//PUBACK for QOS_2
+//PUBACK for QOS1, QOS2 
 void mqtt_puback(Mqtt *mqtt, int msgid);
 
 //PUBREC for QOS_2
@@ -195,7 +203,7 @@ void mqtt_pubrel(Mqtt *mqtt, int msgid);
 void mqtt_pubcomp(Mqtt *mqtt, int msgid);
 
 //SUBSCRIBE
-int mqtt_subscribe(Mqtt *mqtt, const char *topic, unsigned char qos);
+int mqtt_subscribe(Mqtt *mqtt, const char *topic, uint8_t qos);
 
 //UNSUBSCRIBE
 int mqtt_unsubscribe(Mqtt *mqtt, const char *topic);
@@ -206,16 +214,21 @@ void mqtt_ping(Mqtt *mqtt);
 //DISCONNECT
 void mqtt_disconnect(Mqtt *mqtt);
 
+//RUN Loop
+void mqtt_run(Mqtt *mqtt);
+
 //RELEASE
 void mqtt_release(Mqtt *mqtt);
 
 //Will create and release
-MqttWill *mqtt_will_new(char *topic, char *msg, int retain, int qos);
+MqttWill *mqtt_will_new(char *topic, char *msg, bool retain, uint8_t qos);
 
 void mqtt_will_release(MqttWill *will);
 
-//-------------------
-MqttMsg *mqtt_msg_new();
+//Message create and release
+MqttMsg * mqtt_msg_new(int msgid, int qos, bool retain, bool dup, char *topic, int payloadlen, char *payload);
+
+const char* mqtt_msg_name(uint8_t type);
 
 void mqtt_msg_free(MqttMsg *msg);
 

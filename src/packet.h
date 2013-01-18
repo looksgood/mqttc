@@ -29,164 +29,88 @@
  * POSSIBILITY OF SUCH DAMAGE.
  *
  */
-
 #ifndef __MQTT_PACKET_H
 #define __MQTT_PACKET_H
 
-typedef unsigned int bool;
+#include <stdint.h>
+#include <stdbool.h>
 
 #define PROTOCOL_MAGIC "MQIsdp"
-#define LSB(A) (unsigned char)(A & 0x00FF)
-#define MSB(A) (unsigned char)((A & 0xFF00) >> 8)
 
-enum MsgType {
-	CONNECT = 1,
-	CONNACK,
-	PUBLISH,
-	PUBACK,
-	PUBREC,
-	PUBREL,
-    PUBCOMP,
-	SUBSCRIBE,
-	SUBACK,
-	UNSUBSCRIBE,
-	UNSUBACK,
-    PINGREQ,
-	PINGRESP,
-	DISCONNECT
-};
+#define CONNECT 0x10
+#define CONNACK 0x20
+#define PUBLISH 0x30
+#define PUBACK 0x40
+#define PUBREC 0x50
+#define PUBREL 0x60
+#define PUBCOMP 0x70
+#define SUBSCRIBE 0x80
+#define SUBACK 0x90
+#define UNSUBSCRIBE 0xA0
+#define UNSUBACK 0xB0
+#define PINGREQ 0xC0
+#define PINGRESP 0xD0
+#define DISCONNECT 0xE0
 
-typedef union _Header
-{
-	char byte;	/**< the whole byte */
-	struct
-	{
-		bool retain : 1;		/**< retained flag bit */
-		unsigned int qos : 2;	/**< QoS value, 0, 1 or 2 */
-		bool dup : 1;			/**< DUP flag bit */
-		unsigned int type : 4;	/**< message type nibble */
-	} bits;
-} Header;
+#define LSB(A) (uint8_t)(A & 0x00FF)
+#define MSB(A) (uint8_t)((A & 0xFF00) >> 8)
 
+/*
+|--------------------------------------
+| 7 6 5 4 |     3    |  2 1  | 0      |
+|  Type   | DUP flag |  QoS  | RETAIN |
+|--------------------------------------
+*/
+#define GETTYPE(HDR)		(HDR & 0xF0)
+#define SETQOS(HDR, Q)		(HDR | ((Q) << 1))
+#define GETQOS(HDR)			((HDR & 0x06) >> 1)
+#define SETDUP(HDR, D)		(HDR | ((D) << 3))
+#define GETDUP(HDR)			((HDR & 0x08) >> 3)
+#define SETRETAIN(HDR, R)	(HDR | (R))
+#define GETRETAIN(HDR)		(HDR & 0x01)
 
-typedef	union _ConnFlags {
-	unsigned char byte;	/**< all connect flags */
-	struct
-	{
-		int : 1;				/**< unused */
-		bool cleansess : 1;	/**< cleansession flag */
-		bool will : 1;			/**< will flag */
-		unsigned int willqos : 2;	/**< will QoS value */
-		bool willretain : 1;		/**< will retain setting */
-		bool password : 1; 			/**< 3.1 password */
-		bool username : 1;			/**< 3.1 user name */
-	} bits;
-} ConnFlags;	/**< connect flags byte */
+/*
+|----------------------------------------------------------------------------------
+|     7    |    6     |      5     |  4   3  |     2    |       1      |     0    |
+| username | password | willretain | willqos | willflag | cleansession | reserved |
+|----------------------------------------------------------------------------------
+*/
+#define FLAG_CLEANSESS(F, C)	(F | ((C) << 1))
+#define FLAG_WILL(F, W)			(F | ((W) << 2))	
+#define FLAG_WILLQOS(F, Q)		(F | ((Q) << 3))
+#define FLAG_WILLRETAIN(F, R) 	(F | ((R) << 5))
+#define FLAG_PASSWD(F, P)		(F | ((P) << 6))
+#define FLAG_USERNAME(F, U)		(F | ((U) << 7))
 
-typedef struct _Packet {
-	Header header;
-} MqttPacket;
+#define MAX_PAYLOAD_SIZE 268435455
 
-/**
- * connect packet.
- */
-typedef struct _ConnectPacket
-{
-	Header header;	/**< MQTT header byte */
-	union
-	{
-		unsigned char byte;	/**< all connect flags */
-		struct
-		{
-			int : 1;				/**< unused */
-			bool cleansess : 1;	/**< cleansession flag */
-			bool will : 1;			/**< will flag */
-			unsigned int willqos : 2;	/**< will QoS value */
-			bool willretain : 1;		/**< will retain setting */
-			bool password : 1; 			/**< 3.1 password */
-			bool username : 1;			/**< 3.1 user name */
-		} bits;
-	} flags;	/**< connect flags byte */
+int _encode_remaining_length(char *buf, int length);
 
-	char *protocol, /**< MQTT protocol name */
-		*clientid,	/**< string client id */
-        *willtopic,	/**< will topic */
-        *willmsg,	/**< will payload */
-		*username, 
-		*password; 
+int _decode_remaining_length(char **buf, int *count);
 
-	int keepalive;		/**< keepalive timeout value in seconds */
-	unsigned char version;	/**< MQTT version number */
-} ConnectPacket;
+void _write_header(char **pptr, uint8_t header);
 
-/**
- * CONNACK packet
- */
-typedef struct _ConnAckPacket {
-	Header header;
-	int rc;
-} ConnAckPacket;
+uint8_t _read_header(char **pptr);
 
-typedef struct _SubTopic {
-	char *topic;
-	unsigned char qos;
-} SubTopic;
+void _write_remaining_length(char **ptr, char *bytes, int count);
 
-/**
- * SUBACK packet.
- */
-typedef struct
-{
-	Header header;	/**< MQTT header byte */
-	int msgid;		/**< MQTT message id */
-	int *qoss;		/**< list of granted QoSs */
-	int num;
-} SubAckPacket;
+void _write_char(char **pptr, char c);
 
-/**
- * one of the ack packets.
- */
-typedef struct
-{
-	Header header;	/**< MQTT header byte */
-	int msgid;		/**< MQTT message id */
-} AckPacket;
+char _read_char(char** pptr);
 
-typedef AckPacket PubAckPacket;
-typedef AckPacket PubRecPacket;
-typedef AckPacket PubRelPacket;
-typedef AckPacket PubCompPacket;
-typedef AckPacket UnsubackPacket;
+void _write_int(char **pptr, int i);
 
-char* _packet_name(int type);
+int _read_int(char** pptr);
 
-int encode_length(char *buf, int length);
+void _write_string(char **pptr, const char *string);
 
-int decode_length(char **buf, int *count);
+char* _read_string(char** pptr);
 
-void write_header(char **pptr, Header *header);
+void _write_string_len(char **pptr, const char *string, int len);
 
-void write_length(char **ptr, char *bytes, int num);
+char* _read_string_len(char **pptr, int *len);
 
-void write_string(char **pptr, const char *string);
-
-void write_string_len(char **pptr, const char *string, int len);
-
-void write_char(char **pptr, char c);
-
-void write_int(char **pptr, int i);
-
-void write_payload(char **pptr, const char *payload, int length);
-
-char read_char(char** pptr);
-
-int read_int(char** pptr);
-
-char* read_string_len(char **pptr, int *len);
-
-char* read_string(char** pptr);
-
-char* read_string_len(char **pptr, int *len);
+void _write_payload(char **pptr, const char *payload, int length);
 
 #endif /* __MQTT_PACKET_H */
 

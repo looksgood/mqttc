@@ -68,7 +68,7 @@ static MqttMsg testmsg = {0, 0, 0, 0, "a/b/c", 5, "hello"};
 static void
 client_prepare() {
 	
-	mqtt = mqtt_new();
+	mqtt = mqtt_new(aeCreateEventLoop());
 	
 	mqtt->state = 0;
 	mqtt->server = "localhost";
@@ -175,12 +175,12 @@ static void on_disconnect(Mqtt *mqtt, void *data, int id) {
 }
 
 static void on_message(Mqtt *mqtt, MqttMsg *msg) {
-
+	logger_info("MQTT", "topic: %s, payload: %s", msg->topic, msg->payload);
 }
 
 void set_callbacks(Mqtt *mqtt) {
 	int i = 0;
-	command_callback callbacks[15] = {
+	MqttCallback callbacks[15] = {
 		NULL,
 		on_connect,
 		on_connack,
@@ -198,9 +198,9 @@ void set_callbacks(Mqtt *mqtt) {
 		on_disconnect
 	};
 	for(i = 0; i < 15; i++) {
-		mqtt_set_command_callback(mqtt, i, callbacks[i]);
+		mqtt_set_callback(mqtt, i, callbacks[i]);
 	}
-	mqtt_set_message_callback(mqtt, on_message);
+	mqtt_set_msg_callback(mqtt, on_message);
 }
 
 int main(int argc, char **argv) {
@@ -217,9 +217,9 @@ int main(int argc, char **argv) {
 	printf("mqttc is running\n");
 
 
-	mqtt_subscribe(mqtt, "c/d/e", QOS_0);
+	mqtt_subscribe(mqtt, "c/d/e", MQTT_QOS0);
 	mqtt_unsubscribe(mqtt, "c/d/e");
-	mqtt_subscribe(mqtt, "c/d/e", QOS_0);
+	mqtt_subscribe(mqtt, "c/d/e", MQTT_QOS0);
 
 	mqtt_publish(mqtt, &testmsg);
 
