@@ -45,11 +45,9 @@
 #include "ae.h"
 #include "anet.h"
 #include "zmalloc.h"
-#include "logger.h"
 #include "packet.h"
 #include "mqtt.h"
 
-//FIXME: error 
 #define MAX_RETRIES 3
 
 #define KEEPALIVE 300
@@ -181,6 +179,15 @@ mqtt_clear_msg_callback(Mqtt *mqtt) {
 	mqtt->msgcallback = NULL;
 }
 
+static void
+_mqtt_set_error(char *err, const char *fmt, ...) {
+    va_list ap;
+    if (!err) return;
+    va_start(ap, fmt);
+    vsnprintf(err, 1023, fmt, ap);
+    va_end(ap);
+}
+
 static void 
 _mqtt_send_connect(Mqtt *mqtt) {
 	int len = 0;
@@ -197,19 +204,13 @@ _mqtt_send_connect(Mqtt *mqtt) {
 	
 	//flags
 	flags = FLAG_CLEANSESS(flags, mqtt->cleansess);
-	logger_info("MQTT", "flags: %d", flags);
 	flags = FLAG_WILL(flags, (mqtt->will) ? 1 : 0);
-	logger_info("MQTT", "flags: %d", flags);
 	if (mqtt->will) {
 		flags = FLAG_WILLQOS(flags, mqtt->will->qos);
-		logger_info("MQTT", "flags: %d", flags);
 		flags = FLAG_WILLRETAIN(flags, mqtt->will->retain);
-		logger_info("MQTT", "flags: %d", flags);
 	}
 	if (mqtt->username) flags = FLAG_USERNAME(flags, 1);
 	if (mqtt->password) flags = FLAG_PASSWD(flags, 1);
-
-	logger_info("MQTT", "flags: %d", flags);
 
 	//length
 	if(mqtt->clientid) {
@@ -228,8 +229,6 @@ _mqtt_send_connect(Mqtt *mqtt) {
 	
 	remaining_count = _encode_remaining_length(remaining_length, len);
 
-	logger_debug("MQTT", "len: %d, remaining_count: %d\n", len, remaining_count);
-	
 	ptr = buffer = zmalloc(1+remaining_count+len);
 	
 	_write_header(&ptr, header);
@@ -265,6 +264,7 @@ _mqtt_keepalive(aeEventLoop *el, long long id, void *clientdata) {
 	MQTT_NOTUSED(id);
 	Mqtt *mqtt = (Mqtt *)clientdata;
 	_mqtt_send_ping(mqtt);
+	_mqtt_callback(mqtt, PINGREQ, NULL, 0);
 	//TODO: TIMEOUT
     //mqtt->keepalive->timeoutid = aeCreateTimeEvent(el, 
     //   period*2, mqtt_keepalive_timeout, mqtt, NULL);
@@ -275,16 +275,12 @@ static void _mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask);
 
 int 
 mqtt_connect(Mqtt *mqtt) {
-    char err[1024] = {0};
     char server[1024] = {0};
-    if(anetResolve(err, mqtt->server, server) != ANET_OK) {
-        logger_error("MQTT", "cannot resolve %s, error: %s", mqtt->server, err);
+    if(anetResolve(mqtt->err, mqtt->server, server) != ANET_OK) {
 		return -1;
     } 
-    logger_debug("MQTT", "connect to %s", server);
-    int fd = anetTcpConnect(err, server, mqtt->port);
+    int fd = anetTcpConnect(mqtt->err, server, mqtt->port);
     if (fd < 0) {
-        logger_error("SOCKET", "failed to connect %s: %s\n", mqtt->server, err);
         return fd;
     }
     mqtt->fd = fd;
@@ -292,7 +288,7 @@ mqtt_connect(Mqtt *mqtt) {
 	_mqtt_send_connect(mqtt);
     mqtt_set_state(mqtt, MQTT_STATE_CONNECTING);
 	_mqtt_callback(mqtt, CONNECT, NULL, MQTT_STATE_CONNECTING);
-	
+
 	mqtt->keepalive_timer = aeCreateTimeEvent(mqtt->el, 
 		mqtt->keepalive*1000, _mqtt_keepalive, mqtt, NULL);
 
@@ -312,7 +308,6 @@ _mqtt_reconnect(aeEventLoop *el, long long id, void *clientData)
             mqtt->retries = 1;
         } 
         timeout = ((2 * mqtt->retries) * 60) * 1000;
-        logger_debug("MQTT", "reconnect after %d seconds", timeout/1000);
         aeCreateTimeEvent(el, timeout, _mqtt_reconnect, mqtt, NULL);
         mqtt->retries++;
     } else {
@@ -493,8 +488,6 @@ _mqtt_send_disconnect(Mqtt *mqtt) {
 void
 mqtt_disconnect(Mqtt *mqtt) {
 	_mqtt_send_disconnect(mqtt);
-	
-    logger_debug("MQTT", "mqtt is disconnected");
     if(mqtt->fd > 0) {
         aeDeleteFileEvent(mqtt->el, mqtt->fd, AE_READABLE);
         close(mqtt->fd);
@@ -533,43 +526,36 @@ mqtt_release(Mqtt *mqtt) {
 --------------------------------------*/
 static void
 _mqtt_handle_connack(Mqtt *mqtt, int rc) {
-	logger_info("MQTT", "connack code: %d", rc);
+	_mqtt_callback(mqtt, CONNACK, NULL, rc);
 	if(rc == CONNACK_ACCEPT) {
 		mqtt_set_state(mqtt, MQTT_STATE_CONNECTED);
 		_mqtt_callback(mqtt, CONNECT, NULL, MQTT_STATE_CONNECTED);
-	} else {
-		mqtt->shutdown_asap = true;
-	}
+	} 
 }
 
 static void
 _mqtt_handle_publish(Mqtt *mqtt, MqttMsg *msg) {
-	logger_debug("MQTT", "got publish: %s", msg->topic); 	
 	_mqtt_msg_callback(mqtt, msg);
 	mqtt_msg_free(msg);
 }
 
 static void
 _mqtt_handle_puback(Mqtt *mqtt, int type, int msgid) {
-	logger_debug("MQTT", "%s: msgid=%d", mqtt_msg_name(type), msgid);
 	_mqtt_callback(mqtt, type, NULL, msgid);
 }
 
 static void
 _mqtt_handle_suback(Mqtt *mqtt, int msgid, int qos) {
-	logger_debug("MQTT", "SUBACK: msgid=%d, qos=%d", msgid, qos);
 	_mqtt_callback(mqtt, SUBACK, NULL, msgid);
 }
 
 static void
 _mqtt_handle_unsuback(Mqtt *mqtt, int msgid) {
-	logger_debug("MQTT", "UNSUBACK: msgid=%d", msgid);
 	_mqtt_callback(mqtt, UNSUBACK, NULL, msgid);
 }
 
 static void
 _mqtt_handle_pingresp(Mqtt *mqtt) {
-	logger_debug("MQTT", "PINGRESP");
 	_mqtt_callback(mqtt, PINGRESP, NULL, 0);
 }
 
@@ -624,7 +610,7 @@ _mqtt_handle_packet(Mqtt *mqtt, uint8_t header, char *buffer, int buflen) {
 		_mqtt_handle_pingresp(mqtt);
 		break;
 	default:
-		logger_error("MQTT", "error header: %d", header);
+		_mqtt_set_error(mqtt->err, "badheader: %d", type);
 	}
 }
 
@@ -639,7 +625,7 @@ _mqtt_reader_feed(Mqtt *mqtt, char *buffer, int len) {
 	
 	remaining_length = _decode_remaining_length(&ptr, &remaining_count);
 	if( (1+remaining_count+remaining_length) != len ) {
-		logger_error("MQTT", "badpacket: remaing_length=%d, remaing_count=%d, len=%d",
+		_mqtt_set_error(mqtt->err, "badpacket: remaing_length=%d, remaing_count=%d, len=%d",
 			remaining_length, remaining_count, len);	
 		return;
 	}
@@ -657,20 +643,16 @@ _mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask) {
     nread = read(fd, buffer, MQTT_BUFFER_SIZE);
     if (nread < 0) {
         if (errno == EAGAIN) {
-            logger_warning("MQTT", "TCP EAGAIN");
             return;
         } else {
-			logger_error("SOCKET", "socket error: %d, shutdown...", errno);
-			mqtt->shutdown_asap = true;
+			mqtt->error = errno;
+			_mqtt_set_error(mqtt->err, "socket error: %d.", errno);
         }
     } else if (nread == 0) {
-        logger_error("MQTT", "mqtt broker is disconnected.");
         mqtt_disconnect(mqtt);
 		timeout = (random() % 300) * 1000,
-		logger_info("MQTT", "reconnect after %d seconds", timeout/1000);
 		aeCreateTimeEvent(el, timeout, _mqtt_reconnect, mqtt, NULL);
     } else {
-        logger_debug("SOCKET", "RECV: %d", nread);
         _mqtt_reader_feed(mqtt, buffer, nread);
     }
 }

@@ -33,11 +33,12 @@
 #ifndef __CLIENT_H
 #define __CLIENT_H
 
+#include <stdbool.h>
+
 typedef struct _Client {
-	int pidfile;
-	int daemonize;
-	int shutdown_asap;
+	aeEventLoop *el;
 	Mqtt *mqtt;
+	bool shutdown_asap;
 } Client;
 
 #endif

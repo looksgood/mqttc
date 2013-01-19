@@ -32,6 +32,7 @@
  */
 
 #include <stdio.h>
+#include <stdbool.h>
 #include <stdarg.h>
 #include <time.h>
 #include <stdlib.h>
@@ -52,134 +53,175 @@
 #include "ae.h"
 #include "anet.h"
 #include "mqtt.h"
-#include "logger.h"
 #include "zmalloc.h"
 #include "packet.h"
 #include "client.h"
 
-static Mqtt *mqtt;
-
 static Client client;
 
-static MqttWill will = {0, 0, "will", "WillMessage"};
+static const char *PROMPT = "mqttc> ";
 
-static MqttMsg testmsg = {0, 0, 0, 0, "a/b/c", 5, "hello"};
+static const char *COMMANDS[3] = {
+	"publish topic message\n",
+	"subscribe topic qos\n",
+	"unsubscribe topic\n"
+};
 
 static void
-client_prepare() {
-	
-	mqtt = mqtt_new(aeCreateEventLoop());
-	
+print_usage() {
+	printf("usage: mqttc -h host -p port -u username -P password -k keepalive\n");
+}
+
+static void 
+print_prompt() {
+	write(STDOUT_FILENO, PROMPT, strlen(PROMPT));
+}
+
+static void
+print_help() {
+	int i;
+	const char *cmd;
+	const char *help = "commands are: \n";
+	write(STDOUT_FILENO, help, strlen(help));
+	for(i = 0; i < 3; i++) {
+		cmd = COMMANDS[i];
+		write(STDOUT_FILENO, cmd, strlen(cmd));
+	}
+}
+
+static int 
+client_cron(aeEventLoop *eventLoop,
+    long long id, void *clientData) {
+	Client *client = (Client *)clientData;
+    if(client->shutdown_asap) {
+		printf("mqttc is shutdown...");
+        aeStop(client->el);
+    }
+    return 1000;
+}
+
+static void
+mqtt_init(Mqtt *mqtt) {
 	mqtt->state = 0;
-	mqtt->server = "localhost";
-	mqtt->username = "test";
-	mqtt->password = "public";
 	mqtt->clientid = "mqttc";
 	mqtt->port = 1883;
 	mqtt->retries = 3;
 	mqtt->error = 0;
 	mqtt->msgid = 1;
 	mqtt->cleansess = 1;
-	//mqtt->keepalive = 60;
-	mqtt->will = &will;
-
-	client.mqtt = mqtt;
-	client.pidfile = -1;
-	client.daemonize = 0;
-	client.shutdown_asap = 0;
+	mqtt->keepalive = 60;
 }
 
-static int 
-client_cron(aeEventLoop *eventLoop,
-    long long id, void *clientData) {
-    if(client.shutdown_asap) {
-        //TODO: ok???
-		logger_info("MQTTC", "shutdown.");
-        aeStop(mqtt->el);
-        if(client.daemonize) {
-            //unlink(client.pidfile);
-        }
-    }
-    return 1000;
-}
-
-static void 
+static void
 client_init() {
+	aeEventLoop *el;
+	Mqtt *mqtt;
+	el = aeCreateEventLoop();
+	client.el = el;
+	client.mqtt = mqtt_new(el);
+	client.shutdown_asap = false;
+	mqtt_init(client.mqtt);
+
     signal(SIGCHLD, SIG_IGN);
-    signal(SIGPIPE, SIG_IGN);
+    //signal(SIGPIPE, SIG_IGN);
 
-    //setupSignalHandlers();
-
-    aeCreateTimeEvent(mqtt->el, 100, client_cron, NULL, NULL);
-
+    aeCreateTimeEvent(el, 100, client_cron, &client, NULL);
     srand(time(NULL)^getpid());
 }
 
 static void 
 on_connect(Mqtt *mqtt, void *data, int state) {
-	logger_info("MQTT", "on_connect: %d", state);
+	switch(state) {
+	case MQTT_STATE_CONNECTING:
+		printf("mqttc is connecting to %s:%d...\n", mqtt->server, mqtt->port);
+		break;
+	case MQTT_STATE_CONNECTED:
+		printf("mqttc is connected.\n");
+		print_prompt();
+		break;
+	case MQTT_STATE_DISCONNECTED:
+		printf("mqttc is disconnected.\n");
+		break;
+	default:
+		printf("mqttc is in badstate.\n");
+	}
 }
 
-static void on_connack(Mqtt *mqtt, void *data, int rc) {
-	logger_info("MQTT", "on_connack: %d", rc);
+static void 
+on_connack(Mqtt *mqtt, void *data, int rc) {
+	printf("received connack: code=%d\n", rc);
 }
 
-static void on_publish(Mqtt *mqtt, void *data, int msgid) {
+static void 
+on_publish(Mqtt *mqtt, void *data, int msgid) {
 	MqttMsg *msg = (MqttMsg *)data;
-	logger_info("MQTT", "on_publish: topic=%s, msgid=%d, payload=%s", msg->topic, msgid, msg->payload);
+	printf("publish to %s: %s\n", msg->topic, msg->payload);
 }
 
-static void on_puback(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_puback: msgid=%d", msgid);
+static void 
+on_puback(Mqtt *mqtt, void *data, int msgid) {
+	printf("received puback: msgid=%d\n", msgid);
 }
 
-static void on_pubrec(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_pubrec: msgid=%d", msgid);
+static void 
+on_pubrec(Mqtt *mqtt, void *data, int msgid) {
+	printf("received pubrec: msgid=%d\n", msgid);
 }
 
-static void on_pubrel(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_pubrel: msgid=%d", msgid);
+static void 
+on_pubrel(Mqtt *mqtt, void *data, int msgid) {
+	printf("received pubrel: msgid=%d\n", msgid);
 }
 
-static void on_pubcomp(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_pubcomp: msgid=%d", msgid);
+static void 
+on_pubcomp(Mqtt *mqtt, void *data, int msgid) {
+	printf("received pubcomp: msgid=%d\n", msgid);
 }
 
-static void on_subscribe(Mqtt *mqtt, void *data, int msgid) {
+static void 
+on_subscribe(Mqtt *mqtt, void *data, int msgid) {
 	char *topic = (char *)data;
-	logger_info("MQTT", "on_subscribe: topic=%s, msgid=%d", topic, msgid);
+	printf("subscribe to %s: msgid=%d\n", topic, msgid);
 }
 
-static void on_suback(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_suback: msgid=%d", msgid);
+static void 
+on_suback(Mqtt *mqtt, void *data, int msgid) {
+	printf("received suback: msgid=%d\n", msgid);
 }
 
-static void on_unsubscribe(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_unsubscribe: msgid=%d", msgid);
+static void 
+on_unsubscribe(Mqtt *mqtt, void *data, int msgid) {
+	printf("unsubscribe %s: msgid=%d\n", (char *)data, msgid);
 }
 
-static void on_unsuback(Mqtt *mqtt, void *data, int msgid) {
-	logger_info("MQTT", "on_unsuback: msgid=%d", msgid);
+static void 
+on_unsuback(Mqtt *mqtt, void *data, int msgid) {
+	printf("received unsuback: msgid=%d\n", msgid);
 }
 
-static void on_pingreq(Mqtt *mqtt, void *data, int id) {
-	logger_info("MQTT", "on_pingreq");
+static void 
+on_pingreq(Mqtt *mqtt, void *data, int id) {
+	//printf("send pingreq\n");
 }
 
-static void on_pingresp(Mqtt *mqtt, void *data, int id) {
-	logger_info("MQTT", "on_pingresp");
+static void 
+on_pingresp(Mqtt *mqtt, void *data, int id) {
+	//printf("received pingresp\n");
 }
 
-static void on_disconnect(Mqtt *mqtt, void *data, int id) {
-	logger_info("MQTT", "on_disconnect");
+static void 
+on_disconnect(Mqtt *mqtt, void *data, int id) {
+	printf("send disconnect\n");
 }
 
-static void on_message(Mqtt *mqtt, MqttMsg *msg) {
-	logger_info("MQTT", "topic: %s, payload: %s", msg->topic, msg->payload);
+static void 
+on_message(Mqtt *mqtt, MqttMsg *msg) {
+	printf("received message: topic=%s, payload=%s\n", msg->topic, msg->payload);
 }
 
-void set_callbacks(Mqtt *mqtt) {
-	int i = 0;
+static void 
+set_callbacks(Mqtt *mqtt) {
+	int i = 0, type;
 	MqttCallback callbacks[15] = {
 		NULL,
 		on_connect,
@@ -198,36 +240,127 @@ void set_callbacks(Mqtt *mqtt) {
 		on_disconnect
 	};
 	for(i = 0; i < 15; i++) {
-		mqtt_set_callback(mqtt, i, callbacks[i]);
+		type = (i << 4) & 0xf0;
+		mqtt_set_callback(mqtt, type, callbacks[i]);
 	}
 	mqtt_set_msg_callback(mqtt, on_message);
 }
 
+static int 
+setargs(char *args, char **argv) {
+	int argc = 0;
+	while (isspace(*args)) ++args;
+	while (*args) {
+		if (argv) argv[argc] = args;
+		while (*args && !isspace(*args)) ++args;
+		if (argv && *args) *args++ = '\0';
+		while (isspace(*args)) ++args;
+		argc++;
+	}
+	return argc;
+}
+
+static void
+client_read(aeEventLoop *el, int fd, void *clientdata, int mask) {
+	int nread = 0;
+	char buffer[1024] = {0};
+	char *badcmd = "Invalid Command. try 'help'\n";
+	int argc;
+	char *argv[1024];
+	MqttMsg *msg;
+
+	nread = read(fd, buffer, 1024);
+	if(nread <= 0) {
+		client.shutdown_asap = true;
+		return;
+	}
+	if(!strncmp(buffer, "help", 4) || !strncmp(buffer, "?", 1)) {
+		print_help();
+	} else if(!strncmp(buffer, "subscribe ", strlen("subscribe "))) {
+		argc = setargs(buffer+strlen("subscribe "), argv); 
+		if(argc == 2) {
+			mqtt_subscribe(client.mqtt, argv[0], atoi(argv[1]));
+		} else {
+			print_help();
+		}
+	} else if(!strncmp(buffer, "unsubscribe ", strlen("unsubscribe "))) {
+		argc = setargs(buffer+strlen("unsubscribe "), argv);
+		if(argc == 1) {
+			mqtt_unsubscribe(client.mqtt, argv[0]);
+		} else {
+			print_help();
+		}
+	} else if(!strncmp(buffer, "publish ", strlen("publish "))) {
+		argc = setargs(buffer+strlen("publish "), argv);
+		if(argc == 2) {
+			msg = mqtt_msg_new(0, 0, false, false, 
+				zstrdup(argv[0]), strlen(argv[1]), zstrdup(argv[1]));
+			mqtt_publish(client.mqtt, msg);
+			mqtt_msg_free(msg);
+		} else {
+			print_help();
+		}
+	} else if (!strncmp(buffer, "\n", 1)){
+		//ignore
+	} else {
+		write(STDOUT_FILENO, badcmd, strlen(badcmd));
+	}
+	print_prompt();
+}
+
+static void
+client_open() {
+	aeCreateFileEvent(client.el, STDIN_FILENO, AE_READABLE, client_read, &client);
+}
+
+static void
+client_setup(int argc, char **argv) {
+	char c;
+	Mqtt *mqtt = client.mqtt;
+	while ((c = getopt(argc, argv, "Hh:p:u:P:k:")) != -1) {
+        switch (c) {
+        case 'h':
+			mqtt_set_server(mqtt, optarg);
+            break;
+        case 'p':
+			mqtt_set_port(mqtt, atoi(optarg));
+            break;
+        case 'u':
+			mqtt_set_username(mqtt, optarg);
+            break;
+		case 'P':
+			mqtt_set_passwd(mqtt, optarg);
+            break;
+		case 'k':
+			mqtt_set_keepalive(mqtt, atoi(optarg));
+			break;
+		case 'H':
+            print_usage();
+			exit(0);
+		}
+    }
+	if(!mqtt->server) mqtt_set_server(mqtt, "localhost");
+}
+
 int main(int argc, char **argv) {
-	client_prepare();
-	printf("mqttc is prepared\n");
+	//init
 	client_init();
-	printf("mqttc is inited\n");
-	set_callbacks(mqtt);
-	printf("mqttc set callbacks \n");
-	if(mqtt_connect(mqtt) < 0) {
-        logger_error("mqttc", "mqtt connect failed.");
+
+	//parse args
+	client_setup(argc, argv);
+
+	//set stdin event
+	client_open();
+
+	//set callbacks
+	set_callbacks(client.mqtt);
+	
+	if(mqtt_connect(client.mqtt) < 0) {
+        printf("mqttc connect failed.\n");
         exit(-1);
     }
-	printf("mqttc is running\n");
 
-
-	mqtt_subscribe(mqtt, "c/d/e", MQTT_QOS0);
-	mqtt_unsubscribe(mqtt, "c/d/e");
-	mqtt_subscribe(mqtt, "c/d/e", MQTT_QOS0);
-
-	mqtt_publish(mqtt, &testmsg);
-
-	testmsg.qos = 1;
-
-	mqtt_publish(mqtt, &testmsg);
-
-	mqtt_run(mqtt);
+	mqtt_run(client.mqtt);
 
 	return 0;
 }

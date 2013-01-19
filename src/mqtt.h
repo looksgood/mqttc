@@ -114,7 +114,7 @@ struct _Mqtt {
 
 	uint8_t state;
 
-	char *err;
+	char err[1024];
 
     char *server;
 

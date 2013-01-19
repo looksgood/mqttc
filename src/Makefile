@@ -2,7 +2,7 @@
 # Copy from hiredis
 # This file is released under the BSD license, see the COPYING file
 
-OBJ=ae.o anet.o logger.o mqtt.o packet.o zmalloc.o 
+OBJ=ae.o anet.o mqtt.o packet.o zmalloc.o 
 BINS=mqttc
 LIBNAME=libmqttc
 
@@ -45,9 +45,8 @@ all: $(DYLIBNAME) $(BINS)
 # Deps (use make dep to generate this)
 ae.o: ae.c ae.h config.h zmalloc.h
 anet.o: anet.c anet.h
-logger.o: logger.c logger.h
 packet.o: packet.c packet.h zmalloc.h
-mqtt.o: mqtt.c ae.h anet.h mqtt.h logger.h zmalloc.h
+mqtt.o: mqtt.c ae.h anet.h mqtt.h zmalloc.h
 zmalloc.o: zmalloc.c config.h
 
 $(DYLIBNAME): $(OBJ)
