@@ -57,12 +57,14 @@
 #include "packet.h"
 #include "client.h"
 
+#define _NOTUSED(V) ((void)V)
+
 static Client client;
 
 static const char *PROMPT = "mqttc> ";
 
 static const char *COMMANDS[3] = {
-	"publish topic message\n",
+	"publish topic qos message\n",
 	"subscribe topic qos\n",
 	"unsubscribe topic\n"
 };
@@ -90,20 +92,28 @@ print_help() {
 }
 
 static int 
-client_cron(aeEventLoop *eventLoop,
-    long long id, void *clientData) {
+client_cron(aeEventLoop *el, long long id, void *clientData) {
 	Client *client = (Client *)clientData;
+	_NOTUSED(el);
+	_NOTUSED(id);
     if(client->shutdown_asap) {
 		printf("mqttc is shutdown...");
-        aeStop(client->el);
+        aeStop(el);
     }
     return 1000;
 }
 
 static void
+client_prepare() {
+    srand(time(NULL)^getpid());
+}
+
+static void
 mqtt_init(Mqtt *mqtt) {
+	char clientid[23];
+	sprintf(clientid, "mqttc%d", rand());
 	mqtt->state = 0;
-	mqtt->clientid = "mqttc";
+	mqtt_set_clientid(mqtt, clientid);
 	mqtt->port = 1883;
 	mqtt->retries = 3;
 	mqtt->error = 0;
@@ -115,7 +125,6 @@ mqtt_init(Mqtt *mqtt) {
 static void
 client_init() {
 	aeEventLoop *el;
-	Mqtt *mqtt;
 	el = aeCreateEventLoop();
 	client.el = el;
 	client.mqtt = mqtt_new(el);
@@ -126,11 +135,11 @@ client_init() {
     //signal(SIGPIPE, SIG_IGN);
 
     aeCreateTimeEvent(el, 100, client_cron, &client, NULL);
-    srand(time(NULL)^getpid());
 }
 
 static void 
 on_connect(Mqtt *mqtt, void *data, int state) {
+	_NOTUSED(data);
 	switch(state) {
 	case MQTT_STATE_CONNECTING:
 		printf("mqttc is connecting to %s:%d...\n", mqtt->server, mqtt->port);
@@ -149,73 +158,102 @@ on_connect(Mqtt *mqtt, void *data, int state) {
 
 static void 
 on_connack(Mqtt *mqtt, void *data, int rc) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received connack: code=%d\n", rc);
 }
 
 static void 
 on_publish(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(msgid);
 	MqttMsg *msg = (MqttMsg *)data;
 	printf("publish to %s: %s\n", msg->topic, msg->payload);
 }
 
 static void 
 on_puback(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received puback: msgid=%d\n", msgid);
 }
 
 static void 
 on_pubrec(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received pubrec: msgid=%d\n", msgid);
 }
 
 static void 
 on_pubrel(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received pubrel: msgid=%d\n", msgid);
 }
 
 static void 
 on_pubcomp(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received pubcomp: msgid=%d\n", msgid);
 }
 
 static void 
 on_subscribe(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
 	char *topic = (char *)data;
 	printf("subscribe to %s: msgid=%d\n", topic, msgid);
 }
 
 static void 
 on_suback(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received suback: msgid=%d\n", msgid);
 }
 
 static void 
 on_unsubscribe(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("unsubscribe %s: msgid=%d\n", (char *)data, msgid);
 }
 
 static void 
 on_unsuback(Mqtt *mqtt, void *data, int msgid) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
 	printf("received unsuback: msgid=%d\n", msgid);
 }
 
 static void 
 on_pingreq(Mqtt *mqtt, void *data, int id) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
+	_NOTUSED(id);
 	//printf("send pingreq\n");
 }
 
 static void 
 on_pingresp(Mqtt *mqtt, void *data, int id) {
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
+	_NOTUSED(id);
 	//printf("received pingresp\n");
 }
 
 static void 
 on_disconnect(Mqtt *mqtt, void *data, int id) {
-	printf("send disconnect\n");
+	_NOTUSED(mqtt);
+	_NOTUSED(data);
+	_NOTUSED(id);
+	printf("disconnect\n");
 }
 
 static void 
 on_message(Mqtt *mqtt, MqttMsg *msg) {
+	_NOTUSED(mqtt);
 	printf("received message: topic=%s, payload=%s\n", msg->topic, msg->payload);
 }
 
@@ -264,11 +302,13 @@ static void
 client_read(aeEventLoop *el, int fd, void *clientdata, int mask) {
 	int nread = 0;
 	char buffer[1024] = {0};
-	char *badcmd = "Invalid Command. try 'help'\n";
+	const char *badcmd = "Invalid Command. try 'help'\n";
 	int argc;
 	char *argv[1024];
 	MqttMsg *msg;
-
+	_NOTUSED(el);
+	_NOTUSED(mask);
+	_NOTUSED(clientdata);
 	nread = read(fd, buffer, 1024);
 	if(nread <= 0) {
 		client.shutdown_asap = true;
@@ -292,9 +332,9 @@ client_read(aeEventLoop *el, int fd, void *clientdata, int mask) {
 		}
 	} else if(!strncmp(buffer, "publish ", strlen("publish "))) {
 		argc = setargs(buffer+strlen("publish "), argv);
-		if(argc == 2) {
-			msg = mqtt_msg_new(0, 0, false, false, 
-				zstrdup(argv[0]), strlen(argv[1]), zstrdup(argv[1]));
+		if(argc == 3) {
+			msg = mqtt_msg_new(0, atoi(argv[1]), false, false,
+				zstrdup(argv[0]), strlen(argv[2]), zstrdup(argv[2]));
 			mqtt_publish(client.mqtt, msg);
 			mqtt_msg_free(msg);
 		} else {
@@ -343,6 +383,7 @@ client_setup(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+	client_prepare();
 	//init
 	client_init();
 

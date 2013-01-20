@@ -255,31 +255,15 @@ _mqtt_send_connect(Mqtt *mqtt) {
 	zfree(buffer);
 }
 
-static void _mqtt_send_ping(Mqtt *mqtt);
-
-static int 
-_mqtt_keepalive(aeEventLoop *el, long long id, void *clientdata) {
-	int period;
-	assert(el);
-	MQTT_NOTUSED(id);
-	Mqtt *mqtt = (Mqtt *)clientdata;
-	_mqtt_send_ping(mqtt);
-	_mqtt_callback(mqtt, PINGREQ, NULL, 0);
-	//TODO: TIMEOUT
-    //mqtt->keepalive->timeoutid = aeCreateTimeEvent(el, 
-    //   period*2, mqtt_keepalive_timeout, mqtt, NULL);
-	return mqtt->keepalive*1000;
-}
-
 static void _mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask);
 
 int 
 mqtt_connect(Mqtt *mqtt) {
     char server[1024] = {0};
-    if(anetResolve(mqtt->err, mqtt->server, server) != ANET_OK) {
+    if(anetResolve(mqtt->errstr, mqtt->server, server) != ANET_OK) {
 		return -1;
     } 
-    int fd = anetTcpConnect(mqtt->err, server, mqtt->port);
+    int fd = anetTcpConnect(mqtt->errstr, server, mqtt->port);
     if (fd < 0) {
         return fd;
     }
@@ -288,9 +272,6 @@ mqtt_connect(Mqtt *mqtt) {
 	_mqtt_send_connect(mqtt);
     mqtt_set_state(mqtt, MQTT_STATE_CONNECTING);
 	_mqtt_callback(mqtt, CONNECT, NULL, MQTT_STATE_CONNECTING);
-
-	mqtt->keepalive_timer = aeCreateTimeEvent(mqtt->el, 
-		mqtt->keepalive*1000, _mqtt_keepalive, mqtt, NULL);
 
     return fd;
 }
@@ -521,6 +502,19 @@ mqtt_release(Mqtt *mqtt) {
 	zfree(mqtt);
 }
 
+static int 
+_mqtt_keepalive(aeEventLoop *el, long long id, void *clientdata) {
+	assert(el);
+	MQTT_NOTUSED(id);
+	Mqtt *mqtt = (Mqtt *)clientdata;
+	_mqtt_send_ping(mqtt);
+	_mqtt_callback(mqtt, PINGREQ, NULL, 0);
+	//FIXME: TIMEOUT
+    //mqtt->keepalive->timeoutid = aeCreateTimeEvent(el, 
+    //   period*2, mqtt_keepalive_timeout, mqtt, NULL);
+	return mqtt->keepalive*1000;
+}
+
 /*--------------------------------------
 ** MQTT handler and reader.
 --------------------------------------*/
@@ -528,6 +522,8 @@ static void
 _mqtt_handle_connack(Mqtt *mqtt, int rc) {
 	_mqtt_callback(mqtt, CONNACK, NULL, rc);
 	if(rc == CONNACK_ACCEPT) {
+		mqtt->keepalive_timer = aeCreateTimeEvent(mqtt->el, 
+			mqtt->keepalive*1000, _mqtt_keepalive, mqtt, NULL);
 		mqtt_set_state(mqtt, MQTT_STATE_CONNECTED);
 		_mqtt_callback(mqtt, CONNECT, NULL, MQTT_STATE_CONNECTED);
 	} 
@@ -535,17 +531,26 @@ _mqtt_handle_connack(Mqtt *mqtt, int rc) {
 
 static void
 _mqtt_handle_publish(Mqtt *mqtt, MqttMsg *msg) {
+	if(msg->qos == MQTT_QOS1) {
+		mqtt_puback(mqtt, msg->id);
+	} else if(msg->qos == MQTT_QOS2) {
+		mqtt_pubrec(mqtt, msg->id);
+	}
 	_mqtt_msg_callback(mqtt, msg);
 	mqtt_msg_free(msg);
 }
 
 static void
 _mqtt_handle_puback(Mqtt *mqtt, int type, int msgid) {
+	if(type == PUBREL) {
+		mqtt_pubcomp(mqtt, msgid);
+	}
 	_mqtt_callback(mqtt, type, NULL, msgid);
 }
 
 static void
 _mqtt_handle_suback(Mqtt *mqtt, int msgid, int qos) {
+	MQTT_NOTUSED(qos);
 	_mqtt_callback(mqtt, SUBACK, NULL, msgid);
 }
 
@@ -610,7 +615,7 @@ _mqtt_handle_packet(Mqtt *mqtt, uint8_t header, char *buffer, int buflen) {
 		_mqtt_handle_pingresp(mqtt);
 		break;
 	default:
-		_mqtt_set_error(mqtt->err, "badheader: %d", type);
+		_mqtt_set_error(mqtt->errstr, "badheader: %d", type);
 	}
 }
 
@@ -625,7 +630,7 @@ _mqtt_reader_feed(Mqtt *mqtt, char *buffer, int len) {
 	
 	remaining_length = _decode_remaining_length(&ptr, &remaining_count);
 	if( (1+remaining_count+remaining_length) != len ) {
-		_mqtt_set_error(mqtt->err, "badpacket: remaing_length=%d, remaing_count=%d, len=%d",
+		_mqtt_set_error(mqtt->errstr, "badpacket: remaing_length=%d, remaing_count=%d, len=%d",
 			remaining_length, remaining_count, len);	
 		return;
 	}
@@ -646,7 +651,7 @@ _mqtt_read(aeEventLoop *el, int fd, void *privdata, int mask) {
             return;
         } else {
 			mqtt->error = errno;
-			_mqtt_set_error(mqtt->err, "socket error: %d.", errno);
+			_mqtt_set_error(mqtt->errstr, "socket error: %d.", errno);
         }
     } else if (nread == 0) {
         mqtt_disconnect(mqtt);

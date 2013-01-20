@@ -48,6 +48,8 @@
 
 #define MQTT_PROTOCOL_VERSION "MQTT/3.1"
 
+#define MQTT_ERR_SOCKET (-5)
+
 /*
  * MQTT QOS
  */
@@ -114,7 +116,9 @@ struct _Mqtt {
 
 	uint8_t state;
 
-	char err[1024];
+    int error;
+
+	char errstr[1024];
 
     char *server;
 
@@ -127,8 +131,6 @@ struct _Mqtt {
     int port;
 
     int retries;
-
-    int error;
 
 	int msgid;
 

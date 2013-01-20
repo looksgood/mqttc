@@ -284,18 +284,17 @@ int anetUdpSend(char *addr, int port, char *buf, int count)
 {
     int sockfd;
     struct sockaddr_in sa;
-
     sockfd=socket(AF_INET,SOCK_DGRAM,0);
     if(!sockfd) {
         fprintf(stderr, "creating socket: %s", strerror(errno));
         return ANET_ERR;
     }
-
     memset(&sa, 0, sizeof(sa));
     sa.sin_family = AF_INET;
     sa.sin_addr.s_addr=inet_addr(addr);
     sa.sin_port=htons(port);
-    sendto(sockfd, buf, strlen(buf), 0, (struct sockaddr *)&sa,sizeof(sa));
+	//TODO: strlen(buf)
+    sendto(sockfd, buf, count, 0, (struct sockaddr *)&sa,sizeof(sa));
 
     close(sockfd);
     return ANET_OK;
